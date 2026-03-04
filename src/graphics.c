@@ -26,13 +26,22 @@ void init_graphics(uint32_t* framebuffer, uint32_t width, uint32_t height, uint3
 }
 
 void swap_buffers(void) {
+    swap_buffers_rect(0, 0, current_width, current_height);
+}
+
+void swap_buffers_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
     if (!front_buffer || !back_buffer) return;
-    
-    // High-performance copy from back to front
-    // We can copy word by word (32-bit)
-    uint32_t total_words = (current_pitch / 4) * current_height;
-    for (uint32_t i = 0; i < total_words; i++) {
-        front_buffer[i] = back_buffer[i];
+    if (x >= current_width || y >= current_height) return;
+    if (x + w > current_width) w = current_width - x;
+    if (y + h > current_height) h = current_height - y;
+
+    uint32_t pitch_words = current_pitch / 4;
+    for (uint32_t row = 0; row < h; row++) {
+        uint32_t* src_line = &back_buffer[(y + row) * pitch_words + x];
+        uint32_t* dst_line = &front_buffer[(y + row) * pitch_words + x];
+        for (uint32_t i = 0; i < w; i++) {
+            dst_line[i] = src_line[i];
+        }
     }
 }
 
@@ -57,18 +66,38 @@ void draw_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t
 
 void fill_rect(uint32_t x, uint32_t y, uint32_t width, uint32_t height, uint32_t color) {
     if (!current_framebuffer) return;
-    
-    uint32_t words_per_line = current_pitch / 4;
+    if (x >= current_width || y >= current_height) return;
+    if (x + width > current_width) width = current_width - x;
+    if (y + height > current_height) height = current_height - y;
+
+    uint32_t pitch_words = current_pitch / 4;
     for (uint32_t i = 0; i < height; i++) {
-        uint32_t row_offset = (y + i) * words_per_line + x;
+        uint32_t* dst_line = &current_framebuffer[(y + i) * pitch_words + x];
         for (uint32_t j = 0; j < width; j++) {
-            current_framebuffer[row_offset + j] = color;
+            dst_line[j] = color;
+        }
+    }
+}
+
+void draw_image(int32_t x, int32_t y, uint32_t width, uint32_t height, const uint32_t* data) {
+    if (!current_framebuffer || !data) return;
+    uint32_t pitch_words = current_pitch / 4;
+    for (uint32_t row = 0; row < height; row++) {
+        int32_t py = y + (int32_t)row;
+        if (py < 0 || py >= (int32_t)current_height) continue;
+        uint32_t* line = &current_framebuffer[py * pitch_words];
+        for (uint32_t col = 0; col < width; col++) {
+            int32_t px = x + (int32_t)col;
+            if (px < 0 || px >= (int32_t)current_width) continue;
+            uint32_t color = data[row * width + col];
+            if (color != 0xFF00FF) {
+                line[px] = color;
+            }
         }
     }
 }
 
 void clear_screen(uint32_t color) {
-    // Highly optimized clear
     if (!current_framebuffer) return;
     uint32_t total_words = (current_pitch / 4) * current_height;
     for (uint32_t i = 0; i < total_words; i++) {

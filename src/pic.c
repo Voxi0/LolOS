@@ -47,3 +47,17 @@ void pic_remap(int offset1, int offset2) {
 	outb(PIC1_DATA, a1);   // restore masks
 	outb(PIC2_DATA, a2);
 }
+
+void pic_unmask_irq(uint8_t irq) {
+    uint16_t port;
+    uint8_t value;
+
+    if(irq < 8) {
+        port = PIC1_DATA;
+    } else {
+        port = PIC2_DATA;
+        irq -= 8;
+    }
+    value = inb(port) & ~(1 << irq);
+    outb(port, value);
+}

@@ -1,0 +1,72 @@
+mkdir -p build
+nasm -f elf32 src/boot.s -o build/boot.o
+mkdir -p build
+gcc -c src/kernel.c -o build/kernel.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+nasm -f elf32 src/gdt_flush.s -o build/gdt_flush.o
+mkdir -p build
+gcc -c src/gdt.c -o build/gdt.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+nasm -f elf32 src/idt_flush.s -o build/idt_flush.o
+mkdir -p build
+gcc -c src/idt.c -o build/idt.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+nasm -f elf32 src/interrupt.s -o build/interrupt.o
+mkdir -p build
+gcc -c src/isr.c -o build/isr.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/pic.c -o build/pic.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/keyboard.c -o build/keyboard.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/graphics.c -o build/graphics.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/font.c -o build/font.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/gui.c -o build/gui.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/mouse.c -o build/mouse.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/vfs.c -o build/vfs.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/apps.c -o build/apps.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/login.c -o build/login.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/desktop.c -o build/desktop.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+src/desktop.c: In function ‘desktop_on_click’:
+src/desktop.c:126:14: warning: unused variable ‘sw’ [-Wunused-variable]
+  126 |     uint32_t sw = current_width, sh = current_height;
+      |              ^~
+mkdir -p build
+gcc -c src/memory.c -o build/memory.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/rtl8139.c -o build/rtl8139.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+mkdir -p build
+gcc -c src/icons.c -o build/icons.o -std=gnu99 -ffreestanding -O2 -Wall -Wextra -m32 -fno-pie -fno-stack-protector
+gcc -T src/linker.ld -o build/lolos.bin -ffreestanding -O2 -nostdlib -m32 -Wl,-m,elf_i386 -no-pie -Wl,--build-id=none build/boot.o build/kernel.o build/gdt_flush.o build/gdt.o build/idt_flush.o build/idt.o build/interrupt.o build/isr.o build/pic.o build/keyboard.o build/graphics.o build/font.o build/gui.o build/mouse.o build/vfs.o build/apps.o build/login.o build/desktop.o build/memory.o build/rtl8139.o build/icons.o
+mkdir -p build
+nasm -f bin src/bootloader/stage1.s -o build/stage1.bin
+mkdir -p build
+nasm -f bin src/bootloader/stage2.s -o build/stage2.bin
+# Create a 1.44MB floppy image (or just enough for our needs)
+dd if=/dev/zero of=lolos.img bs=512 count=2880
+2880+0 records in
+2880+0 records out
+1474560 bytes (1.5 MB, 1.4 MiB) copied, 0.0122319 s, 123 MB/s
+# Write Stage 1 to Sector 1
+dd if=build/stage1.bin of=lolos.img conv=notrunc
+1+0 records in
+1+0 records out
+512 bytes copied, 0.000158097 s, 512 kB/s
+# Write Stage 2 to Sector 2
+dd if=build/stage2.bin of=lolos.img seek=1 conv=notrunc
+8+0 records in
+8+0 records out
+4096 bytes (4.1 kB, 4.0 KiB) copied, 0.000175861 s, 4.1 MB/s
+# Write Kernel to Sector 10
+objcopy -O binary build/lolos.bin build/kernel.bin
+dd if=build/kernel.bin of=lolos.img seek=9 conv=notrunc
+72+1 records in
+72+1 records out
+37020 bytes (37 kB, 36 KiB) copied, 0.000413397 s, 37 MB/s

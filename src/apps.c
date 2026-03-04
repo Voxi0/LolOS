@@ -2,12 +2,14 @@
 #include "graphics.h"
 #include "font.h"
 #include "vfs.h"
+#include "io.h"
 #include <stdint.h>
 
 terminal_t    g_terminal;
 filemanager_t g_filemanager;
 calculator_t  g_calculator;
 texteditor_t  g_texteditor;
+browser_t     g_browser;
 
 /* ============================================================
  * Shared helpers
@@ -51,40 +53,114 @@ void terminal_draw(void) {
     if (!g_terminal.visible) return;
     uint32_t x = g_terminal.x, y = g_terminal.y;
     uint32_t w = g_terminal.width, h = g_terminal.height;
+    
+    // Calculate how many lines we have and scroll once if needed
+    // Simple iterative scroll to fit
+    while (1) {
+        uint32_t test_cx = x + 6, test_cy = y + 30;
+        int needs_scroll = 0;
+        for (int i = 0; i < g_terminal.buf_len; i++) {
+            char c = g_terminal.buf[i];
+            if (c == '\n') { test_cx = x + 6; test_cy += 10; }
+            else { test_cx += 8; }
+            if (test_cx + 8 > x + w - 6) { test_cx = x + 6; test_cy += 10; }
+            if (test_cy + 10 > y + h - 6) { needs_scroll = 1; break; }
+        }
+        if (!needs_scroll) break;
+        
+        // Remove first line
+        int skip = 0;
+        while (skip < (int)g_terminal.buf_len && g_terminal.buf[skip] != '\n') skip++;
+        if (skip < (int)g_terminal.buf_len) skip++; // Skip the newline too
+        else if (skip == 0 && g_terminal.buf_len > 0) skip = 1;
+
+        if (skip > 0 && skip <= (int)g_terminal.buf_len) {
+            for (int k = 0; k < (int)g_terminal.buf_len - skip; k++)
+                g_terminal.buf[k] = g_terminal.buf[k + skip];
+            g_terminal.buf_len -= skip;
+        } else {
+            g_terminal.buf_len = 0;
+            break;
+        }
+    }
+
+    // Now draw for real
     draw_shadow_box(x, y, w, h, TERM_BG);
     draw_titlebar(x, y, w, "Terminal", 0x1C1C6E);
-    // Text content
     uint32_t cx = x + 6, cy = y + 30;
     for (int i = 0; i < g_terminal.buf_len; i++) {
         char c = g_terminal.buf[i];
         if (c == '\n') { cx = x + 6; cy += 10; }
         else { draw_char(cx, cy, c, TERM_FG, TERM_BG); cx += 8; }
         if (cx + 8 > x + w - 6) { cx = x + 6; cy += 10; }
-        if (cy + 10 > y + h - 6) {
-            // scroll: shift buffer (remove first line)
-            int skip = 0;
-            while (skip < g_terminal.buf_len && g_terminal.buf[skip] != '\n') skip++;
-            skip++; // include the newline
-            for (int k = 0; k < g_terminal.buf_len - skip; k++)
-                g_terminal.buf[k] = g_terminal.buf[k + skip];
-            g_terminal.buf_len -= skip;
-            terminal_draw();
-            return;
-        }
     }
     fill_rect(cx, cy, 6, 9, TERM_FG); // cursor
 }
 
+static void terminal_write_str(const char* s) {
+    for (int i = 0; s[i]; i++) {
+        if (g_terminal.buf_len < 2047) {
+            g_terminal.buf[g_terminal.buf_len++] = s[i];
+        }
+    }
+}
+
+static void terminal_execute_command(char* cmd) {
+    if (cmd[0] == '\0') return;
+
+    if (cmd[0] == 'h' && cmd[1] == 'e' && cmd[2] == 'l' && cmd[3] == 'p') {
+        terminal_write_str("Commands: help, clear, ls, whoami, reboot, echo\n");
+    } else if (cmd[0] == 'c' && cmd[1] == 'l' && cmd[2] == 'e' && cmd[3] == 'a' && cmd[4] == 'r') {
+        g_terminal.buf_len = 0;
+    } else if (cmd[0] == 'l' && cmd[1] == 's') {
+        int cnt = vfs_count();
+        for (int i = 0; i < cnt; i++) {
+            vfs_file_t* f = vfs_get(i);
+            if (f) {
+                terminal_write_str(f->name);
+                terminal_write_str("  ");
+            }
+        }
+        terminal_write_str("\n");
+    } else if (cmd[0] == 'w' && cmd[1] == 'h' && cmd[2] == 'o' && cmd[3] == 'a' && cmd[4] == 'm' && cmd[5] == 'i') {
+        terminal_write_str("admin\n");
+    } else if (cmd[0] == 'r' && cmd[1] == 'e' && cmd[2] == 'b' && cmd[3] == 'o' && cmd[4] == 'o' && cmd[5] == 't') {
+        outb(0x64, 0xFE);
+    } else if (cmd[0] == 'e' && cmd[1] == 'c' && cmd[2] == 'h' && cmd[3] == 'o' && cmd[4] == ' ') {
+        terminal_write_str(cmd + 5);
+        terminal_write_str("\n");
+    } else {
+        terminal_write_str("Unknown command: ");
+        terminal_write_str(cmd);
+        terminal_write_str("\n");
+    }
+}
+
 void terminal_type(char c) {
     if (c == '\b') {
-        if (g_terminal.buf_len > 0 && g_terminal.buf[g_terminal.buf_len-1] != '\n')
+        if (g_terminal.buf_len > 0 && g_terminal.buf[g_terminal.buf_len-1] != ' ' && g_terminal.buf[g_terminal.buf_len-1] != '>')
             g_terminal.buf_len--;
     } else if (c == '\n') {
-        if (g_terminal.buf_len < 2044) {
-            g_terminal.buf[g_terminal.buf_len++] = '\n';
-            g_terminal.buf[g_terminal.buf_len++] = '>';
-            g_terminal.buf[g_terminal.buf_len++] = ' ';
+        // Extract command: find last '> '
+        char cmd[64];
+        int cmd_ptr = 0;
+        int last_prompt = -1;
+        for (int i = 0; i < g_terminal.buf_len - 1; i++) {
+            if (g_terminal.buf[i] == '>' && g_terminal.buf[i+1] == ' ') {
+                last_prompt = i + 2;
+            }
         }
+        
+        if (last_prompt != -1) {
+            for (int i = last_prompt; i < g_terminal.buf_len && cmd_ptr < 63; i++) {
+                cmd[cmd_ptr++] = g_terminal.buf[i];
+            }
+        }
+        cmd[cmd_ptr] = '\0';
+
+        terminal_write_str("\n");
+        terminal_execute_command(cmd);
+        terminal_write_str("> ");
     } else if (g_terminal.buf_len < 2047) {
         g_terminal.buf[g_terminal.buf_len++] = c;
     }
@@ -359,4 +435,47 @@ void texteditor_type(char c) {
         g_texteditor.buf[g_texteditor.buf_len] = '\0';
     }
     texteditor_draw();
+}
+
+/* ============================================================
+ * Browser
+ * ============================================================ */
+
+void browser_init(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    g_browser.x       = x;
+    g_browser.y       = y;
+    g_browser.width   = w;
+    g_browser.height  = h;
+    g_browser.visible = 0;
+    const char* def_url = "http://www.lolos.org";
+    int i = 0; while (def_url[i]) { g_browser.url[i] = def_url[i]; i++; } g_browser.url[i] = '\0';
+}
+
+void browser_draw(void) {
+    if (!g_browser.visible) return;
+    uint32_t x = g_browser.x, y = g_browser.y;
+    uint32_t w = g_browser.width, h = g_browser.height;
+    draw_shadow_box(x, y, w, h, 0xFFFFFF);
+    draw_titlebar(x, y, w, "LoL Browser", 0x1E88E5);
+
+    // Address bar
+    fill_rect(x + 4, y + 26, w - 8, 22, 0xEEEEEE);
+    draw_rect(x + 4, y + 26, w - 8, 22, 0xCCCCCC);
+    draw_string(x + 10, y + 33, g_browser.url, 0x333333, 0xEEEEEE);
+
+    // Content area
+    fill_rect(x + 4, y + 52, w - 8, h - 56, 0xFFFFFF);
+    draw_rect(x + 4, y + 52, w - 8, h - 56, 0xAAAAAA);
+
+    draw_string(x + 20, y + 80, "Welcome to the Web!", 0x111111, 0xFFFFFF);
+    draw_string(x + 20, y + 100, "LolOS Browser v0.1", 0x666666, 0xFFFFFF);
+    
+    // Some mock "web" content
+    fill_rect(x + 20, y + 130, 100, 60, 0xBBDEFB);
+    draw_rect(x + 20, y + 130, 100, 60, 0x1976D2);
+    draw_string(x + 30, y + 150, "IMAGE", 0x1976D2, 0xBBDEFB);
+    
+    draw_string(x + 140, y + 130, "Latest News:", 0x000000, 0xFFFFFF);
+    draw_string(x + 140, y + 150, "- System is blazing fast!", 0x2E7D32, 0xFFFFFF);
+    draw_string(x + 140, y + 170, "- Browser is now available.", 0x1565C0, 0xFFFFFF);
 }

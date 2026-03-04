@@ -5,10 +5,15 @@
 #include "font.h"
 #include "gui.h"
 #include "vfs.h"
+#include "icons.h"
 #include <stdint.h>
 
 os_state_t os_state   = OS_STATE_LOGIN;
 int        focused_app = APP_TERMINAL;
+static int is_dragging = 0;
+static int dragged_app_id = -1;
+static int drag_off_x = 0;
+static int drag_off_y = 0;
 
 /* -------------------------------------------------------
  * Taskbar layout (bottom 32px)
@@ -19,7 +24,7 @@ int        focused_app = APP_TERMINAL;
 #define TB_BTN_PAD 4
 
 static const char* tb_labels[APP_COUNT] = {
-    "Terminal", "Files", "Calculator", "Text Editor"
+    "Terminal", "Files", "Calculator", "Editor", "Browser"
 };
 
 static void draw_taskbar(void) {
@@ -46,13 +51,17 @@ static void draw_taskbar(void) {
         if (i == APP_FILEMANAGER) visible = g_filemanager.visible;
         if (i == APP_CALCULATOR)  visible = g_calculator.visible;
         if (i == APP_TEXTEDITOR)  visible = g_texteditor.visible;
+        if (i == APP_BROWSER)     visible = g_browser.visible;
 
         uint32_t bg = visible ? 0x4A6EB0 : 0x334466;
         uint32_t border = (i == focused_app) ? 0xFFAA00 : 0x556688;
 
         fill_rect(bx, by, TB_BTN_W, TB_BTN_H, bg);
         draw_rect(bx, by, TB_BTN_W, TB_BTN_H, border);
-        draw_string(bx + 4, by + 8, tb_labels[i], 0xFFFFFF, bg);
+        
+        const uint32_t* icons[] = {icon_terminal, icon_files, icon_calc, icon_editor, icon_browser};
+        draw_image(bx + 4, by + 4, 16, 16, icons[i]);
+        draw_string(bx + 24, by + 8, tb_labels[i], 0xFFFFFF, bg);
     }
 
     // Clock area (static for now)
@@ -74,14 +83,12 @@ void desktop_draw(void) {
 
     // Desktop icons (top-left column)
     uint32_t ic_y = 20;
+    const uint32_t* icons[] = {icon_terminal, icon_files, icon_calc, icon_editor, icon_browser};
     for (int i = 0; i < APP_COUNT; i++) {
-        // Icon box
-        fill_rect(12, ic_y, 48, 40, 0x1E4A70);
-        draw_rect(12, ic_y, 48, 40, 0x4488BB);
-        const char* icons[APP_COUNT] = {">_", "FM", "CA", "ED"};
-        draw_string(24, ic_y + 14, icons[i], 0xFFFFFF, 0);
-        draw_string(8, ic_y + 44, tb_labels[i], 0xCCDDFF, 0);
-        ic_y += 72;
+        // Transparent background for icons
+        draw_image(20, ic_y, 16, 16, icons[i]);
+        draw_string(8, ic_y + 20, tb_labels[i], 0xCCDDFF, 0);
+        ic_y += 50;
     }
 
     // Redraw visible windows
@@ -89,6 +96,7 @@ void desktop_draw(void) {
     if (g_filemanager.visible) filemanager_draw();
     if (g_calculator.visible)  calculator_draw();
     if (g_texteditor.visible)  texteditor_draw();
+    if (g_browser.visible)     browser_draw();
 
     // Taskbar on top (always)
     draw_taskbar();
@@ -107,6 +115,7 @@ static void toggle_app(int app_id) {
         case APP_FILEMANAGER: g_filemanager.visible ^= 1; filemanager_draw(); break;
         case APP_CALCULATOR:  g_calculator.visible  ^= 1; calculator_draw();  break;
         case APP_TEXTEDITOR:  g_texteditor.visible  ^= 1; texteditor_draw();  break;
+        case APP_BROWSER:     g_browser.visible     ^= 1; browser_draw();     break;
     }
     focused_app = app_id;
     draw_taskbar();
@@ -114,8 +123,7 @@ static void toggle_app(int app_id) {
 
 void desktop_on_click(int32_t x, int32_t y) {
     if (os_state != OS_STATE_DESKTOP) return;
-    uint32_t sw = current_width, sh = current_height;
-    uint32_t ty = sh - TASKBAR_H;
+    uint32_t ty = current_height - TASKBAR_H;
 
     /* ---- Taskbar buttons ---- */
     if (y >= (int32_t)ty) {
@@ -133,11 +141,11 @@ void desktop_on_click(int32_t x, int32_t y) {
     /* ---- Desktop icons ---- */
     int32_t ic_y = 20;
     for (int i = 0; i < APP_COUNT; i++) {
-        if (hit(x, y, 8, ic_y, 64, 56)) {
+        if (hit(x, y, 8, ic_y, 64, 48)) {
             toggle_app(i);
             return;
         }
-        ic_y += 72;
+        ic_y += 50; // Match desktop_draw spacing
     }
 
     /* ---- Terminal window ---- */
@@ -199,6 +207,95 @@ void desktop_on_click(int32_t x, int32_t y) {
         }
         if (hit(x, y, wx, wy, ww, wh)) { focused_app = APP_TEXTEDITOR; draw_taskbar(); return; }
     }
+
+    /* ---- Browser window ---- */
+    if (g_browser.visible) {
+        uint32_t wx = g_browser.x, wy = g_browser.y;
+        uint32_t ww = g_browser.width, wh = g_browser.height;
+        if (hit(x, y, wx + ww - 20, wy + 4, 16, 16)) {
+            g_browser.visible = 0; desktop_draw(); return;
+        }
+        if (hit(x, y, wx, wy, ww, wh)) { focused_app = APP_BROWSER; draw_taskbar(); return; }
+    }
+}
+
+void desktop_on_mouse_button(int32_t x, int32_t y, uint8_t buttons) {
+    if (os_state != OS_STATE_DESKTOP) return;
+
+    static uint8_t prev_buttons = 0;
+    uint8_t pressed = (buttons & 1) && !(prev_buttons & 1);
+    uint8_t released = !(buttons & 1) && (prev_buttons & 1);
+    prev_buttons = buttons;
+
+    if (pressed) {
+        // Check for dragging (title bars)
+        // Check windows in reverse order (topmost first)
+        struct { uint8_t visible; uint32_t x, y, w, h; int id; } wins[] = {
+            {g_texteditor.visible,  g_texteditor.x,  g_texteditor.y,  g_texteditor.width,  24, APP_TEXTEDITOR},
+            {g_browser.visible,     g_browser.x,     g_browser.y,     g_browser.width,     24, APP_BROWSER},
+            {g_calculator.visible,  g_calculator.x,  g_calculator.y,  g_calculator.width,  24, APP_CALCULATOR},
+            {g_filemanager.visible, g_filemanager.x, g_filemanager.y, g_filemanager.width, 24, APP_FILEMANAGER},
+            {g_terminal.visible,    g_terminal.x,    g_terminal.y,    g_terminal.width,    24, APP_TERMINAL}
+        };
+
+        for (int i = 0; i < 5; i++) {
+            if (wins[i].visible && hit(x, y, wins[i].x, wins[i].y, wins[i].w, wins[i].h)) {
+                // If it's a close button, desktop_on_click will handle it
+                if (hit(x, y, wins[i].x + wins[i].w - 20, wins[i].y + 4, 16, 16)) {
+                    desktop_on_click(x, y);
+                    return;
+                }
+                is_dragging = 1;
+                dragged_app_id = wins[i].id;
+                drag_off_x = x - (int32_t)wins[i].x;
+                drag_off_y = y - (int32_t)wins[i].y;
+                focused_app = wins[i].id;
+                draw_taskbar();
+                return;
+            }
+        }
+        // If not dragging, handle normal click
+        desktop_on_click(x, y);
+    } else if (released) {
+        is_dragging = 0;
+        dragged_app_id = -1;
+    }
+}
+
+void desktop_on_mouse_move(int32_t x, int32_t y) {
+    if (os_state != OS_STATE_DESKTOP) return;
+    if (!is_dragging) return;
+
+    // Save old box for partial swap
+    uint32_t old_x = 0, old_y = 0, w = 0, h = 0;
+    switch (dragged_app_id) {
+        case APP_TERMINAL:    old_x = g_terminal.x;    old_y = g_terminal.y;    w = g_terminal.width;  h = g_terminal.height; break;
+        case APP_FILEMANAGER: old_x = g_filemanager.x; old_y = g_filemanager.y; w = g_filemanager.width; h = g_filemanager.height; break;
+        case APP_CALCULATOR:  old_x = g_calculator.x;  old_y = g_calculator.y;  w = g_calculator.width; h = g_calculator.height; break;
+        case APP_TEXTEDITOR:  old_x = g_texteditor.x;  old_y = g_texteditor.y;  w = g_texteditor.width; h = g_texteditor.height; break;
+        case APP_BROWSER:     old_x = g_browser.x;     old_y = g_browser.y;     w = g_browser.width;    h = g_browser.height; break;
+    }
+
+    uint32_t new_x = (uint32_t)(x - drag_off_x);
+    uint32_t new_y = (uint32_t)(y - drag_off_y);
+
+    // Clamp Y to not go under taskbar or above screen
+    if (new_y > current_height - 60) new_y = current_height - 60;
+    if ((int32_t)new_y < 0) new_y = 0;
+
+    switch (dragged_app_id) {
+        case APP_TERMINAL:    g_terminal.x = new_x; g_terminal.y = new_y; break;
+        case APP_FILEMANAGER: g_filemanager.x = new_x; g_filemanager.y = new_y; break;
+        case APP_CALCULATOR:  g_calculator.x = new_x; g_calculator.y = new_y; break;
+        case APP_TEXTEDITOR:  g_texteditor.x = new_x; g_texteditor.y = new_y; break;
+        case APP_BROWSER:     g_browser.x = new_x; g_browser.y = new_y; break;
+    }
+
+    desktop_draw();
+    
+    // Swap old hole and new box
+    swap_buffers_rect(old_x, old_y, w, h);
+    swap_buffers_rect(new_x, new_y, w, h);
 }
 
 void desktop_keyboard(char c) {
@@ -217,4 +314,7 @@ void desktop_keyboard(char c) {
 void desktop_init(void) {
     os_state   = OS_STATE_LOGIN;
     focused_app = APP_TERMINAL;
+    
+    // Initialize Browser
+    browser_init(150, 150, 400, 300);
 }

@@ -134,19 +134,28 @@ static void mouse_callback(registers_t* regs) {
 
             uint8_t buttons = mouse_byte[0] & 0x07;
             
-            // If left button was pressed and now released, trigger click
-            if ((mouse_buttons & 0x01) && !(buttons & 0x01)) {
-                extern void desktop_on_click(int32_t x, int32_t y);
-                desktop_on_click(mouse_x, mouse_y);
+            extern void desktop_on_mouse_move(int32_t x, int32_t y);
+            extern void desktop_on_mouse_button(int32_t x, int32_t y, uint8_t buttons);
+
+            if (dx != 0 || dy != 0) {
+                desktop_on_mouse_move(mouse_x, mouse_y);
+            }
+
+            if (buttons != mouse_buttons) {
+                desktop_on_mouse_button(mouse_x, mouse_y, buttons);
             }
 
             mouse_buttons = buttons;
 
             // Draw cursor at new position
             draw_cursor(mouse_x, mouse_y);
+            
+            // Partial swap: erase old and draw new
+            swap_buffers_rect(prev_x, prev_y, 8, 8);
+            swap_buffers_rect(mouse_x, mouse_y, 8, 8);
+            
             prev_x = mouse_x;
             prev_y = mouse_y;
-            swap_buffers();
             break;
     }
 }

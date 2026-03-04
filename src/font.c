@@ -100,18 +100,18 @@ const uint8_t font8x8_basic[128][8] = {
     [0x7E] = { 0x00, 0x00, 0x39, 0x4E, 0x00, 0x00, 0x00, 0x00 }    // U+007E (~)
 };
 
-void draw_char(uint32_t x, uint32_t y, char c, uint32_t fg_color, uint32_t bg_color) {
-    if (c < 0 || c >= 128) return;
+void draw_char(uint32_t x, uint32_t y, unsigned char c, uint32_t fg, uint32_t bg) {
+    if (c >= 128) return;
     
     const uint8_t* glyph = font8x8_basic[(int)c];
     
     for (uint32_t row = 0; row < 8; row++) {
         for (uint32_t col = 0; col < 8; col++) {
-            // Check if pixel is set. MSB is the leftmost pixel.
-            if ((glyph[row] >> col) & 1) {
-                put_pixel(x + col, y + row, fg_color);
-            } else if (bg_color != 0x0) { // If background is not transparent
-                put_pixel(x + col, y + row, bg_color);
+            // Check if pixel is set. Bit 0 is the leftmost pixel for this font data.
+            if (glyph[row] & (1 << col)) {
+                put_pixel(x + col, y + row, fg);
+            } else if (bg != 0x0) { // If background is not transparent
+                put_pixel(x + col, y + row, bg);
             }
         }
     }

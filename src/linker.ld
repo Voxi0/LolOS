@@ -15,6 +15,7 @@ SECTIONS
 	   Next we'll put the .text section. */
 	.text BLOCK(4K) : ALIGN(4K)
 	{
+		build/boot.o(.text.entry)
 		*(.multiboot)
 		*(.text)
 	}

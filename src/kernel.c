@@ -13,6 +13,7 @@
 #include "desktop.h"
 #include "login.h"
 #include "memory.h"
+#include "rtl8139.h"
 #include <stdint.h>
 
 #define PORT 0x3f8   /* COM1 */
@@ -75,6 +76,9 @@ void kernel_main(uint32_t magic, uint32_t addr) {
     /* Init VFS */
     vfs_init();
     print_serial("VFS initialized.\n");
+
+    // PCI & Network
+    rtl8139_init();
 
     /* Graphics */
     if (mbi->flags & (1 << 12)) {

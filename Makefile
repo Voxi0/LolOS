@@ -9,20 +9,33 @@ SRC_DIR = src
 BUILD_DIR = build
 ISO_DIR = iso
 
-OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/gdt_flush.o $(BUILD_DIR)/gdt.o $(BUILD_DIR)/idt_flush.o $(BUILD_DIR)/idt.o $(BUILD_DIR)/interrupt.o $(BUILD_DIR)/isr.o $(BUILD_DIR)/pic.o $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/graphics.o $(BUILD_DIR)/font.o $(BUILD_DIR)/gui.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/apps.o $(BUILD_DIR)/login.o $(BUILD_DIR)/desktop.o $(BUILD_DIR)/memory.o
+OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/gdt_flush.o $(BUILD_DIR)/gdt.o $(BUILD_DIR)/idt_flush.o $(BUILD_DIR)/idt.o $(BUILD_DIR)/interrupt.o $(BUILD_DIR)/isr.o $(BUILD_DIR)/pic.o $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/graphics.o $(BUILD_DIR)/font.o $(BUILD_DIR)/gui.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/apps.o $(BUILD_DIR)/login.o $(BUILD_DIR)/desktop.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/rtl8139.o $(BUILD_DIR)/icons.o
 BIN = $(BUILD_DIR)/lolos.bin
-ISO = lolos.iso
+ISO = lolos.img
 
 all: $(ISO)
 
-$(ISO): $(BIN)
-	mkdir -p $(ISO_DIR)/boot/grub
-	cp $(BIN) $(ISO_DIR)/boot/
-	@printf 'set timeout=0\nset default=0\nmenuentry "LoLOS" {\n    set gfxpayload=1024x768x32\n    multiboot /boot/lolos.bin\n    boot\n}\n' > $(ISO_DIR)/boot/grub/grub.cfg
-	grub-mkrescue -o $(ISO) $(ISO_DIR) 2>&1
+$(ISO): $(BIN) $(BUILD_DIR)/stage1.bin $(BUILD_DIR)/stage2.bin
+	# Create a 1.44MB floppy image (or just enough for our needs)
+	dd if=/dev/zero of=$(ISO) bs=512 count=2880
+	# Write Stage 1 to Sector 1
+	dd if=$(BUILD_DIR)/stage1.bin of=$(ISO) conv=notrunc
+	# Write Stage 2 to Sector 2
+	dd if=$(BUILD_DIR)/stage2.bin of=$(ISO) seek=1 conv=notrunc
+	# Write Kernel to Sector 10
+	objcopy -O binary $(BIN) $(BUILD_DIR)/kernel.bin
+	dd if=$(BUILD_DIR)/kernel.bin of=$(ISO) seek=9 conv=notrunc
 
 $(BIN): $(OBJS) $(SRC_DIR)/linker.ld
-	$(CC) -T $(SRC_DIR)/linker.ld -o $@ $(LDFLAGS) $(BUILD_DIR)/boot.o $(filter-out $(BUILD_DIR)/boot.o,$(OBJS))
+	$(CC) -T $(SRC_DIR)/linker.ld -o $@ $(LDFLAGS) $(OBJS)
+
+$(BUILD_DIR)/stage1.bin: $(SRC_DIR)/bootloader/stage1.s
+	mkdir -p $(BUILD_DIR)
+	$(AS) -f bin $< -o $@
+
+$(BUILD_DIR)/stage2.bin: $(SRC_DIR)/bootloader/stage2.s
+	mkdir -p $(BUILD_DIR)
+	$(AS) -f bin $< -o $@
 
 $(BUILD_DIR)/boot.o: $(SRC_DIR)/boot.s
 	mkdir -p $(BUILD_DIR)
@@ -100,8 +113,16 @@ $(BUILD_DIR)/memory.o: $(SRC_DIR)/memory.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) -c $< -o $@ $(CFLAGS)
 
+$(BUILD_DIR)/rtl8139.o: $(SRC_DIR)/rtl8139.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) -c $< -o $@ $(CFLAGS)
+
+$(BUILD_DIR)/icons.o: $(SRC_DIR)/icons.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) -c $< -o $@ $(CFLAGS)
+
 clean:
 	rm -rf $(BUILD_DIR) $(ISO_DIR) $(ISO)
 
 run: $(ISO)
-	qemu-system-i386 -cdrom $(ISO) -vga std -serial stdio
+	qemu-system-i386 -drive format=raw,file=$(ISO) -vga std -serial stdio -d int,cpu_reset -no-reboot
